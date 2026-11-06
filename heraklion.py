@@ -908,88 +908,210 @@ for x, bft_val in zip(times_num_sel, gusts_bft_sel):
 
 
 
-# Section 8: CAPE and Lifted Index
-ax_cape = axs[7]
-ax_cape.set_ylabel('MUCAPE\n(J/kg)', fontsize=9, color='#007F7F')
-ax_cape.tick_params(axis='y', labelcolor='#007F7F')
+# Section 8: TOTAL TOTALS INDEX (TTI) + LIFTED INDEX (LI)
 
-# Filter negative Lifted Index values every 3 hours
-time_interval_hours = 1
-li_values = lifted_index
-first_forecast_time = times[0]
-gfs_run_time = first_forecast_time
+# --- 1. Dew Point at 850 hPa (Magnus formula) ---
 
-li_times = [gfs_run_time + pd.Timedelta(hours=i * time_interval_hours) for i in range(len(li_values))]
+rh850_index = np.where(np.asarray(pressure_levels) == 850)[0][0]
 
-neg_li_times = []
-neg_li_values = []
+rh850 = humidity[rh850_index]
+rh850_safe = np.clip(rh850, 1.0, 100.0)
 
-for t, v in zip(li_times, li_values):
-    if v <= 0 and t.hour % 3 == 0:
-        neg_li_times.append(t)
-        neg_li_values.append(v)
+a_magnus = 17.625
+b_magnus = 243.04
 
-ax_li = ax_cape.twinx()
+gamma_850 = (
+    np.log(rh850_safe / 100.0)
+    + (a_magnus * temperature_850 /
+       (b_magnus + temperature_850))
+)
 
-# Bars axis below CAPE axis
-ax_li.set_zorder(1)            # Bars axis lower
-ax_cape.set_zorder(2)          # CAPE axis above
-
-# Transparent background on CAPE axis so bars show through
-ax_cape.patch.set_alpha(0)
-
-# Plot bars on ax_li with lower zorder
-bars = ax_li.bar(neg_li_times, neg_li_values, color='#F08228', width=0.08, align='center', zorder=1)
-
-# Plot the red CAPE line with very high zorder on ax_cape (always on top)
-cape_line, = ax_cape.plot(times, cape, color='#007F7F', label='MUCAPE (J/kg)', zorder=10)
-
-# Other elements (grid, zero line)
-ax_cape.grid(axis='both', color='#92A9B6', linestyle='dotted',dashes=(2, 5),alpha=0.7, zorder=0)
-
-max_cape = cape.max()
-ymax = max_cape + 200
-
-if max_cape < 1000:
-    step = 200
-else:
-    step = 400
-
-ax_cape.set_ylim(0, ymax)
-yticks = np.arange(step, ymax + 1, step)
-ax_cape.set_yticks(yticks)
+dewpoint_850 = (
+    b_magnus * gamma_850 /
+    (a_magnus - gamma_850)
+)
 
 
-# Axes labels and ticks unchanged
-ax_li.set_ylabel('Lifted\n index', fontsize=9, color='#F08228')
-ax_li.tick_params(axis='y', labelcolor='#F08228')
-ax_li.set_ylim(0, -6)
-ax_li.set_yticks(np.arange(-2, -8, -2))
+# --- 2. Calculate Total Totals Index ---
+
+tti = (
+    temperature_850
+    + dewpoint_850
+    - 2.0 * temperature_500
+)
+
+
+# --- 3. Sample every 3 hours ---
+
+tti_indices = np.arange(0, len(times), 3)
+
+tti_times = times[tti_indices]
+tti_values = tti[tti_indices]
+
+li_times = times[tti_indices]
+li_values = lifted_index[tti_indices]
+
+
+# --- 4. Main TTI axis ---
+
+ax_tti = axs[7]
+
+ax_tti.set_ylim(20, 60)
+ax_tti.set_yticks([20, 30, 40, 50, 60])
+
+# TTI label
+ax_tti.set_ylabel(
+    'Total-totals',
+    fontsize=9,
+    color='#F5A45B',
+    labelpad=3
+)
+
+# TTI label position
+ax_tti.yaxis.set_label_position('left')
+ax_tti.yaxis.tick_left()
+
+ax_tti.yaxis.set_label_coords(-0.10, 0.5)
+
+# TTI tick labels farther left
+ax_tti.tick_params(
+    axis='y',
+    labelsize=8,
+    pad=20,
+    labelcolor='#F08228'
+)
+
+# Individual TTI tick colors
+tti_tick_colors = {
+    20: '#D6C900',
+    30: '#D6C900',
+    40: '#888888',
+    50: '#F08228',
+    60: '#F08228'
+}
+
+for tick in ax_tti.get_yticklabels():
+    value = int(float(tick.get_text()))
+    tick.set_color(tti_tick_colors[value])
+
+
+# --- 5. TTI bars: Wetterzentrale style ---
+
+# Orange: TTI >= 40
+# Yellow: TTI < 40
+# All bars start from the common threshold of 40
+
+tti_above = np.isfinite(tti_values) & (tti_values >= 40)
+tti_below = np.isfinite(tti_values) & (tti_values < 40)
+
+# Orange bars: extend upwards from 40
+ax_tti.bar(
+    tti_times[tti_above],
+    tti_values[tti_above] - 40.0,
+    bottom=40.0,
+    color='#F08228',
+    width=0.08,
+    align='center',
+    zorder=3
+)
+
+# Yellow bars: extend downwards from 40
+ax_tti.bar(
+    tti_times[tti_below],
+    40.0 - tti_values[tti_below],
+    bottom=tti_values[tti_below],
+    color='#E5D52A',
+    width=0.08,
+    align='center',
+    zorder=3
+)
+
+
+# --- 6. Lifted Index secondary axis ---
+
+ax_li = ax_tti.twinx()
+
+ax_li.patch.set_visible(False)
+
+ax_li.set_zorder(ax_tti.get_zorder() + 1)
+
+# LI scale: -4 to +4, every 2 units
+# Negative values at the top, positive at the bottom
+
+ax_li.set_ylim(4, -4)
+ax_li.set_yticks([-4, -2, 0, 2, 4])
+
+# Keep LI ticks on the LEFT
+ax_li.yaxis.set_label_position('left')
+ax_li.yaxis.tick_left()
+
+# Hide secondary axis spines.
+# The original black frame remains in its position.
+
+for spine in ax_li.spines.values():
+    spine.set_visible(False)
+
+# LI tick numbers close to the plotting axis
+ax_li.tick_params(
+    axis='y',
+    left=True,
+    right=False,
+    labelleft=True,
+    labelright=False,
+    labelcolor='black',
+    labelsize=8,
+    pad=2
+)
+
+# LI label
+ax_li.set_ylabel(
+    'Lifted Index',
+    fontsize=9,
+    color='#F04444',
+    labelpad=3
+)
+
+ax_li.yaxis.set_label_coords(-0.075, 0.5)
+
+
+# --- 7. Lifted Index red dashed line ---
+
+ax_li.plot(
+    li_times,
+    li_values,
+    color='#F04444',
+    linewidth=0.6,
+    linestyle='--',
+    marker='D',
+    markersize=3,
+    markerfacecolor='none',
+    markeredgecolor='#F04444',
+    zorder=10
+)
+
+
+# --- 8. Grid ---
+
+ax_tti.grid(
+    axis='both',
+    color='#92A9B6',
+    linestyle='dotted',
+    dashes=(2, 5),
+    alpha=0.7,
+    zorder=0
+)
 
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Section 9: Z500_1000 (left y-axis) and Z850_1000 (right y-axis)
+# Section 9: Z500_1000 and Z850_1000 (both y-axis labels on right)
 ax_Z500_1000 = axs[8]  # Base axis for Z500_1000
 
-# Plot Z500_1000 on primary y-axis (left)
+# Plot Z500_1000 on primary y-axis
 ax_Z500_1000.plot(
-    times, Z500_1000, 
+    times, Z500_1000,
     color='purple', linewidth=1.5, label='Z500_1000 (500–1000 hPa)'
 )
 
@@ -998,7 +1120,7 @@ Z500_1000_min = np.min(Z500_1000)
 Z500_1000_max = np.max(Z500_1000)
 Z500_1000_lower = 5 * np.floor(Z500_1000_min / 5)
 Z500_1000_upper = 5 * np.ceil(Z500_1000_max / 5)
-Z500_1000_ticks = np.arange(Z500_1000_lower, Z500_1000_upper + 1, 5)  # every 5 dm
+Z500_1000_ticks = np.arange(Z500_1000_lower, Z500_1000_upper + 1, 5)
 
 # Exclude first and last ticks
 if len(Z500_1000_ticks) > 1:
@@ -1007,47 +1129,55 @@ if len(Z500_1000_ticks) > 1:
 ax_Z500_1000.set_ylim(Z500_1000_lower, Z500_1000_upper)
 ax_Z500_1000.set_yticks(Z500_1000_ticks)
 
-# Label and style for Z500_1000 axis (left)
-ax_Z500_1000.set_ylabel("Z500-Z1000\n(dm)", fontsize=9, color='purple')
+# Label and style for Z500_1000 axis
+ax_Z500_1000.set_ylabel("Z500-Z1000", fontsize=9, color='purple')
 ax_Z500_1000.tick_params(axis='y', labelcolor='purple')
-ax_Z500_1000.yaxis.set_label_position("left")
-ax_Z500_1000.yaxis.tick_left()
+ax_Z500_1000.yaxis.set_label_position("right")
+ax_Z500_1000.yaxis.tick_right()
 
 
-# Create secondary y-axis for Z850_1000 (right side)
+# Create secondary y-axis for Z850_1000
 ax_Z850_1000 = ax_Z500_1000.twinx()
 
-# Plot Z850_1000 on right axis
+# Plot Z850_1000 on secondary y-axis
 ax_Z850_1000.plot(
-    times, Z850_1000, 
-    color='green', linewidth=1.5, linestyle='--', label='Z850_1000 (850–1000 hPa)'
+    times, Z850_1000,
+    color='green', linewidth=1.5, linestyle='--',
+    label='Z850_1000 (850–1000 hPa)'
 )
 
-# Set Z850_1000 y-axis limits and ticks 
+# Set Z850_1000 y-axis limits and ticks
 Z850_1000_min = np.min(Z850_1000)
 Z850_1000_max = np.max(Z850_1000)
 Z850_1000_lower = 2 * np.floor(Z850_1000_min / 2)
 Z850_1000_upper = 2 * np.ceil(Z850_1000_max / 2)
-Z850_1000_ticks = np.arange(Z850_1000_lower, Z850_1000_upper + 0.1, 2) # every n dm (n=last number)
+Z850_1000_ticks = np.arange(Z850_1000_lower, Z850_1000_upper + 0.1, 2)
 
-# Exclude last tick 
+# Exclude last tick
 if len(Z850_1000_ticks) > 1:
     Z850_1000_ticks = Z850_1000_ticks[:-1]
 
 ax_Z850_1000.set_ylim(Z850_1000_lower, Z850_1000_upper)
 ax_Z850_1000.set_yticks(Z850_1000_ticks)
 
-# Label and style for Z850_1000 axis (right)
-ax_Z850_1000.set_ylabel("Z850-Z1000\n(dm)", fontsize=9, color='green')
+# Label and style for Z850_1000 axis
+ax_Z850_1000.set_ylabel("Z850-Z1000", fontsize=9, color='green')
 ax_Z850_1000.tick_params(axis='y', labelcolor='green')
 ax_Z850_1000.yaxis.set_label_position("right")
 ax_Z850_1000.yaxis.tick_right()
+
+
+# Position both labels close together on the right
+ax_Z500_1000.yaxis.set_label_coords(1.06, 0.5)
+ax_Z850_1000.yaxis.set_label_coords(1.09, 0.5)
+
 
 # Grid styling (only on primary axis)
 ax_Z500_1000.grid(
     which='both', axis='both',
     color='#92A9B6', linestyle='dotted', dashes=(2, 5), alpha=0.8
 )
+
 
 
 
